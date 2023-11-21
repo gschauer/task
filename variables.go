@@ -61,6 +61,7 @@ func (e *Executor) compiledTask(call taskfile.Call, evaluateShVars bool) (*taskf
 		Silent:               origTask.Silent,
 		Interactive:          origTask.Interactive,
 		Internal:             origTask.Internal,
+		Interpreter:          origTask.Interpreter,
 		Method:               r.Replace(origTask.Method),
 		Prefix:               r.Replace(origTask.Prefix),
 		IgnoreError:          origTask.IgnoreError,
@@ -184,6 +185,7 @@ func (e *Executor) compiledTask(call taskfile.Call, evaluateShVars bool) (*taskf
 			}
 			new.Cmds = append(new.Cmds, &taskfile.Cmd{
 				Cmd:         r.Replace(cmd.Cmd),
+				Interpreter: cmd.Interpreter,
 				Task:        r.Replace(cmd.Task),
 				Silent:      cmd.Silent,
 				Set:         cmd.Set,

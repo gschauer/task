@@ -94,7 +94,7 @@ func TestShouldIgnoreFile(t *testing.T) {
 		ct := ct
 		t.Run(fmt.Sprintf("ignore - %d", k), func(t *testing.T) {
 			t.Parallel()
-			require.Equal(t, shouldIgnoreFile(ct.path), ct.expect)
+			require.Equal(t, task.ShouldIgnoreFile(ct.path), ct.expect)
 		})
 	}
 }

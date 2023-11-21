@@ -1,4 +1,4 @@
-package execext
+package interpext
 
 import (
 	"context"
@@ -10,6 +10,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/go-task/task/v3/interpreter"
+	_ "github.com/go-task/task/v3/interpreter/exprext"
+	"github.com/go-task/task/v3/taskfile"
 	"mvdan.cc/sh/v3/expand"
 	"mvdan.cc/sh/v3/interp"
 	"mvdan.cc/sh/v3/shell"
@@ -21,8 +24,6 @@ type RunCommandOptions struct {
 	Command     string
 	Dir         string
 	Env         []string
-	PosixOpts   []string
-	BashOpts    []string
 	IgnoreError bool
 	Stdin       io.Reader
 	Stdout      io.Writer
@@ -30,7 +31,26 @@ type RunCommandOptions struct {
 }
 
 // ErrNilOptions is returned when a nil options is given
-var ErrNilOptions = errors.New("execext: nil options given")
+var ErrNilOptions = errors.New("interpext: nil options given")
+
+type Interp struct{}
+
+var _ interpreter.Interpreter = (*Interp)(nil)
+
+func (i Interp) CreateOpts(tf *taskfile.Taskfile, cmd *taskfile.Cmd, t *taskfile.Task, stdin io.Reader, stdout, stderr io.Writer) any {
+	return &RunCommandOptions{
+		Command: cmd.Cmd,
+		Dir:     t.Dir,
+		Env:     getEnviron(t),
+		Stdin:   stdin,
+		Stdout:  stdout,
+		Stderr:  stderr,
+	}
+}
+
+func (i Interp) EvalExpr(ctx context.Context, opts any) error {
+	panic("implement me")
+}
 
 // RunCommand runs a shell command
 func RunCommand(ctx context.Context, opts *RunCommandOptions) error {
@@ -38,29 +58,16 @@ func RunCommand(ctx context.Context, opts *RunCommandOptions) error {
 		return ErrNilOptions
 	}
 
-	// Set "-e" or "errexit" by default
-	opts.PosixOpts = append(opts.PosixOpts, "e")
-
-	// Format POSIX options into a slice that mvdan/sh understands
-	var params []string
-	for _, opt := range opts.PosixOpts {
-		if len(opt) == 1 {
-			params = append(params, fmt.Sprintf("-%s", opt))
-		} else {
-			params = append(params, "-o")
-			params = append(params, opt)
-		}
-	}
-
 	environ := opts.Env
 	if len(environ) == 0 {
 		environ = os.Environ()
 	}
 
+	// os.StartProcess(opts.Command)
 	r, err := interp.New(
-		interp.Params(params...),
+		// interp.Params(params...),
 		interp.Env(expand.ListEnviron(environ...)),
-		interp.ExecHandlers(execHandler),
+		interp.ExecHandler(interp.DefaultExecHandler(15*time.Second)),
 		interp.OpenHandler(openHandler),
 		interp.StdIO(opts.Stdin, opts.Stdout, opts.Stderr),
 		dirOption(opts.Dir),
@@ -71,18 +78,6 @@ func RunCommand(ctx context.Context, opts *RunCommandOptions) error {
 
 	parser := syntax.NewParser()
 
-	// Run any shopt commands
-	if len(opts.BashOpts) > 0 {
-		shoptCmdStr := fmt.Sprintf("shopt -s %s", strings.Join(opts.BashOpts, " "))
-		shoptCmd, err := parser.Parse(strings.NewReader(shoptCmdStr), "")
-		if err != nil {
-			return err
-		}
-		if err := r.Run(ctx, shoptCmd); err != nil {
-			return err
-		}
-	}
-
 	// Run the user-defined command
 	p, err := parser.Parse(strings.NewReader(opts.Command), "")
 	if err != nil {
@@ -91,7 +86,7 @@ func RunCommand(ctx context.Context, opts *RunCommandOptions) error {
 	return r.Run(ctx, p)
 }
 
-// IsExitError returns true the given error is an exis status error
+// IsExitError returns true the given error is an exit status error
 func IsExitError(err error) bool {
 	if _, ok := interp.IsExitStatus(err); ok {
 		return true
@@ -114,14 +109,7 @@ func Expand(s string) (string, error) {
 	return "", nil
 }
 
-func execHandler(next interp.ExecHandlerFunc) interp.ExecHandlerFunc {
-	return interp.DefaultExecHandler(15 * time.Second)
-}
-
 func openHandler(ctx context.Context, path string, flag int, perm os.FileMode) (io.ReadWriteCloser, error) {
-	if path == "/dev/null" {
-		return devNull{}, nil
-	}
 	return interp.DefaultOpenHandler()(ctx, path, flag, perm)
 }
 
@@ -144,4 +132,27 @@ func dirOption(path string) interp.RunnerOption {
 
 		return err
 	}
+}
+
+func getEnviron(t *taskfile.Task) []string {
+	if t.Env == nil {
+		return nil
+	}
+
+	environ := os.Environ()
+
+	for k, v := range t.Env.ToCacheMap() {
+		str, isString := v.(string)
+		if !isString {
+			continue
+		}
+
+		if _, alreadySet := os.LookupEnv(k); alreadySet {
+			continue
+		}
+
+		environ = append(environ, fmt.Sprintf("%s=%s", k, str))
+	}
+
+	return environ
 }

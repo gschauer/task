@@ -32,6 +32,7 @@ type Task struct {
 	Silent               bool
 	Interactive          bool
 	Internal             bool
+	Interpreter          string
 	Method               string
 	Prefix               string
 	IgnoreError          bool
@@ -96,6 +97,7 @@ func (t *Task) UnmarshalYAML(node *yaml.Node) error {
 			Silent        bool
 			Interactive   bool
 			Internal      bool
+			Interpreter   string
 			Method        string
 			Prefix        string
 			IgnoreError   bool `yaml:"ignore_error"`
@@ -134,6 +136,7 @@ func (t *Task) UnmarshalYAML(node *yaml.Node) error {
 		t.Silent = task.Silent
 		t.Interactive = task.Interactive
 		t.Internal = task.Internal
+		t.Interpreter = task.Interpreter
 		t.Method = task.Method
 		t.Prefix = task.Prefix
 		t.IgnoreError = task.IgnoreError
@@ -175,6 +178,7 @@ func (t *Task) DeepCopy() *Task {
 		Silent:               t.Silent,
 		Interactive:          t.Interactive,
 		Internal:             t.Internal,
+		Interpreter:          t.Interpreter,
 		Method:               t.Method,
 		Prefix:               t.Prefix,
 		IgnoreError:          t.IgnoreError,

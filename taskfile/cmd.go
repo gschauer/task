@@ -12,6 +12,7 @@ import (
 type Cmd struct {
 	Cmd         string
 	Task        string
+	Interpreter string
 	For         *For
 	Silent      bool
 	Set         []string
@@ -29,6 +30,7 @@ func (c *Cmd) DeepCopy() *Cmd {
 	return &Cmd{
 		Cmd:         c.Cmd,
 		Task:        c.Task,
+		Interpreter: c.Interpreter,
 		For:         c.For.DeepCopy(),
 		Silent:      c.Silent,
 		Set:         deepcopy.Slice(c.Set),
@@ -56,6 +58,7 @@ func (c *Cmd) UnmarshalYAML(node *yaml.Node) error {
 		// A command with additional options
 		var cmdStruct struct {
 			Cmd         string
+			Interpreter string
 			For         *For
 			Silent      bool
 			Set         []string
@@ -65,6 +68,7 @@ func (c *Cmd) UnmarshalYAML(node *yaml.Node) error {
 		}
 		if err := node.Decode(&cmdStruct); err == nil && cmdStruct.Cmd != "" {
 			c.Cmd = cmdStruct.Cmd
+			c.Interpreter = cmdStruct.Interpreter
 			c.For = cmdStruct.For
 			c.Silent = cmdStruct.Silent
 			c.Set = cmdStruct.Set
@@ -76,11 +80,13 @@ func (c *Cmd) UnmarshalYAML(node *yaml.Node) error {
 
 		// A deferred command
 		var deferredCmd struct {
-			Defer string
+			Defer       string
+			Interpreter string
 		}
 		if err := node.Decode(&deferredCmd); err == nil && deferredCmd.Defer != "" {
 			c.Defer = true
 			c.Cmd = deferredCmd.Defer
+			c.Interpreter = deferredCmd.Interpreter
 			return nil
 		}
 

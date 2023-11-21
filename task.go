@@ -5,14 +5,15 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"reflect"
 	"runtime"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/go-task/task/v3/errors"
 	"github.com/go-task/task/v3/internal/compiler"
-	"github.com/go-task/task/v3/internal/env"
 	"github.com/go-task/task/v3/internal/execext"
 	"github.com/go-task/task/v3/internal/fingerprint"
 	"github.com/go-task/task/v3/internal/logger"
@@ -21,7 +22,9 @@ import (
 	"github.com/go-task/task/v3/internal/sort"
 	"github.com/go-task/task/v3/internal/summary"
 	"github.com/go-task/task/v3/internal/templater"
+	"github.com/go-task/task/v3/interpreter"
 	"github.com/go-task/task/v3/taskfile"
+	"mvdan.cc/sh/v3/shell"
 
 	"github.com/sajari/fuzzy"
 	"golang.org/x/exp/slices"
@@ -33,6 +36,14 @@ const (
 	// This exists to prevent infinite loops on cyclic dependencies
 	MaximumTaskCall = 1000
 )
+
+func init() {
+	fac := func() interpreter.Interpreter { return &ShInterpreter{} }
+	interpreter.Register("", fac)
+	interpreter.Register("sh", fac)
+	interpreter.Register("bash", fac)
+	interpreter.Register("default", fac)
+}
 
 // Executor executes a Taskfile
 type Executor struct {
@@ -352,19 +363,32 @@ func (e *Executor) runCommand(ctx context.Context, t *taskfile.Task, call taskfi
 		if err != nil {
 			return fmt.Errorf("task: failed to get variables: %w", err)
 		}
-		stdOut, stdErr, close := outputWrapper.WrapWriter(e.Stdout, e.Stderr, t.Prefix, outputTemplater)
 
-		err = execext.RunCommand(ctx, &execext.RunCommandOptions{
-			Command:   cmd.Cmd,
-			Dir:       t.Dir,
-			Env:       env.Get(t),
-			PosixOpts: slicesext.UniqueJoin(e.Taskfile.Set, t.Set, cmd.Set),
-			BashOpts:  slicesext.UniqueJoin(e.Taskfile.Shopt, t.Shopt, cmd.Shopt),
-			Stdin:     e.Stdin,
-			Stdout:    stdOut,
-			Stderr:    stdErr,
-		})
-		if closeErr := close(err); closeErr != nil {
+		name := cmd.Interpreter
+		if name == "" {
+			name = t.Interpreter
+		}
+		intp, _ := interpreter.GetInstance(name)
+
+		quiet := os.Getenv("HEIMDALL_QUIET") != ""
+		_, intpOpts, _ := strings.Cut(name, " ")
+		stdOut, stdErr, cl := outputWrapper.WrapWriter(e.Stdout, e.Stderr, t.Prefix, outputTemplater)
+		if fs, err := shell.Fields(intpOpts, nil); err == nil && len(fs) > 0 {
+			if slices.Contains(fs, "--quiet") || slices.Contains(fs, "-q") {
+				quiet = true
+			}
+		}
+
+		opts := intp.CreateOpts(e.Taskfile, cmd, t, e.Stdin, stdOut, stdErr)
+		if quiet {
+			if field := reflect.ValueOf(opts).Elem().FieldByName("Env"); field.IsValid() && field.Kind() == reflect.Map {
+				m := field.Interface().(map[string]any)
+				m["HEIMDALL_QUIET"] = "true"
+			}
+		}
+
+		err = intp.EvalExpr(ctx, opts)
+		if closeErr := cl(err); closeErr != nil {
 			e.Logger.Errf(logger.Red, "task: unable to close writer: %v\n", closeErr)
 		}
 		if execext.IsExitError(err) && cmd.IgnoreError {
@@ -375,6 +399,29 @@ func (e *Executor) runCommand(ctx context.Context, t *taskfile.Task, call taskfi
 	default:
 		return nil
 	}
+}
+
+func getEnviron(t *taskfile.Task) []string {
+	if t.Env == nil {
+		return nil
+	}
+
+	environ := os.Environ()
+
+	for k, v := range t.Env.ToCacheMap() {
+		str, isString := v.(string)
+		if !isString {
+			continue
+		}
+
+		if _, alreadySet := os.LookupEnv(k); alreadySet {
+			continue
+		}
+
+		environ = append(environ, fmt.Sprintf("%s=%s", k, str))
+	}
+
+	return environ
 }
 
 func (e *Executor) startExecution(ctx context.Context, t *taskfile.Task, execute func(ctx context.Context) error) error {
@@ -448,6 +495,27 @@ func (e *Executor) GetTask(call taskfile.Call) (*taskfile.Task, error) {
 	}
 
 	return matchingTask, nil
+}
+
+type ShInterpreter struct{}
+
+var _ interpreter.Interpreter = (*ShInterpreter)(nil)
+
+func (i ShInterpreter) CreateOpts(tf *taskfile.Taskfile, cmd *taskfile.Cmd, t *taskfile.Task, stdin io.Reader, stdout, stderr io.Writer) any {
+	return &execext.RunCommandOptions{
+		Command:   cmd.Cmd,
+		Dir:       t.Dir,
+		Env:       getEnviron(t),
+		PosixOpts: slicesext.UniqueJoin(tf.Set, t.Set, cmd.Set),
+		BashOpts:  slicesext.UniqueJoin(tf.Shopt, t.Shopt, cmd.Shopt),
+		Stdin:     stdin,
+		Stdout:    stdout,
+		Stderr:    stderr,
+	}
+}
+
+func (i ShInterpreter) EvalExpr(ctx context.Context, opts any) error {
+	return execext.RunCommand(ctx, opts.(*execext.RunCommandOptions))
 }
 
 type FilterFunc func(task *taskfile.Task) bool
